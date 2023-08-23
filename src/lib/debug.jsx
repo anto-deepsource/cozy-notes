@@ -165,4 +165,116 @@ set(window, 'cozy.debug.notes.debugCollab', async function debugCollab() {
       resolve(data)
     }, 250)
   })
+
+  // then wait and trigger the collab  debug
+  return await new Promise(resolve => {
+    window.setTimeout(async () => {
+      const collabProvider = get(window, 'cozy.debug.notes.collabProvider')
+      const channel = get(window, 'cozy.debug.notes.channel')
+      const data = { date: new Date().toISOString() }
+
+      data.noteId = get(window, 'cozy.debug.notes.noteId')
+      data.initialVersion = get(window, 'cozy.debug.notes.initialVersion')
+      data.returnUrl = get(window, 'cozy.debug.notes.returnUrl')
+
+      const state = collabProvider && collabProvider.getState()
+      const version = collabProvider && state && getVersion(state)
+      const { steps } = (state && sendableSteps(state)) || { steps: [] }
+      data.state = { version, steps, length: steps && steps.length }
+
+      const backoff = channel && channel.backoff
+      const failures = channel && channel.failures
+      const isDirty = channel && channel.isDirty()
+      const isSending = channel && channel.isSending
+      const hasQueue = channel && channel.hasQueuedSteps()
+      const queued = channel && channel.queuedStep
+      const queuedState = queued && queued.state
+      const queuedVersion = queuedState && getVersion(queuedState)
+      const queuedSteps = queued && queued.localSteps && queued.localSteps.steps
+      data.queue = {
+        backoff,
+        failures,
+        isDirty,
+        isSending,
+        hasQueue,
+        version: queuedVersion,
+        steps: queuedSteps,
+        length: queuedSteps && queuedSteps.length
+      }
+
+      const dirtySince = collabProvider.isDirty()
+      const lastRemoteSync = collabProvider.getLastRemoteSync()
+      const lastLocalSave = collabProvider.getLastLocalSave()
+      data.collabState = {
+        dirtySince,
+        lastRemoteSync,
+        lastLocalSave
+      }
+
+      const serviceClient = collabProvider && collabProvider.serviceClient
+      const realtime = serviceClient && serviceClient.realtime
+      const websocket = realtime && realtime.websocket
+      const retryManager = realtime && realtime.retryManager
+      data.realtime = {
+        hasRealtime: !!realtime,
+        started: realtime && realtime.isStarted,
+        hasWebsocket: realtime && realtime.hasWebSocket(),
+        isOpen: realtime && realtime.isWebSocketOpen(),
+        readyState: websocket && websocket.readyState,
+        bufferedAmount: websocket && websocket.bufferedAmount,
+        url: websocket && websocket.url,
+        retries: retryManager && retryManager.retries,
+        wait: retryManager && retryManager.wait
+      }
+
+      const client = get(window, 'cozy.debug.client')
+      data.client = {
+        token: client.stackClient.token,
+        credentials: client.stackClient.getCredentials(),
+        authorization: client.stackClient.getAuthorizationHeader(),
+        uri: client.uri
+      }
+
+      let error = get(window, 'cozy.debug.notes.lastPatchError')
+      if (!error && isDirty) {
+        while (channel.isSending) {
+          await new Promise(resolve => window.setTimeout(resolve, 50))
+        }
+        channel.resetBackoff()
+        channel.processQueue()
+        await Promise.race([
+          new Promise(resolve => window.setTimeout(resolve, 2000)),
+          new Promise(resolve => {
+            const fn = async () => {
+              let err = get(window, 'cozy.debug.notes.lastPatchError')
+              while (!err) {
+                await new Promise(resolve => window.setTimeout(resolve, 50))
+                err = get(window, 'cozy.debug.notes.lastPatchError')
+              }
+              error = err
+              resolve()
+            }
+            fn()
+          })
+        ])
+        if (channel.isDirty()) {
+          channel.backoff = backoff
+          channel.failures = failures
+        }
+      }
+      let msg = error && error.message
+      try {
+        msg = JSON.parse(error.message)
+      } catch (e) {
+        // nothing
+      }
+      data.lastPatchError = {
+        name: error && error.name,
+        status: error && error.status,
+        message: msg
+      }
+
+      resolve(data)
+    }, 250)
+  })
 })
